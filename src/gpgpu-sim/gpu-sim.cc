@@ -1062,16 +1062,16 @@ void gpgpu_sim::print_stats() {
   gpgpu_ctx->stats->ptx_file_line_stats_write_file();
   gpu_print_stat();
 
-  if (g_network_mode) {
-    printf(
-        "----------------------------Interconnect-DETAILS----------------------"
-        "----------\n");
-    icnt_display_stats();
-    icnt_display_overall_stats();
-    printf(
-        "----------------------------END-of-Interconnect-DETAILS---------------"
-        "----------\n");
-  }
+  // if (g_network_mode) {
+  //   printf(
+  //       "----------------------------Interconnect-DETAILS----------------------"
+  //       "----------\n");
+  //   icnt_display_stats();
+  //   icnt_display_overall_stats();
+  //   printf(
+  //       "----------------------------END-of-Interconnect-DETAILS---------------"
+  //       "----------\n");
+  // }
 }
 
 void gpgpu_sim::deadlock_check() {
@@ -1260,37 +1260,37 @@ void gpgpu_sim::gpu_print_stat() {
   // printf("partiton_reqs_in_parallel = %lld\n", partiton_reqs_in_parallel);
   // printf("partiton_reqs_in_parallel_total    = %lld\n",
   // partiton_reqs_in_parallel_total );
-  printf("partiton_level_parallism = %12.4f\n",
-         (float)partiton_reqs_in_parallel / gpu_sim_cycle);
-  printf("partiton_level_parallism_total  = %12.4f\n",
-         (float)(partiton_reqs_in_parallel + partiton_reqs_in_parallel_total) /
-             (gpu_tot_sim_cycle + gpu_sim_cycle));
-  // printf("partiton_reqs_in_parallel_util = %lld\n",
+  // printf("partiton_level_parallism = %12.4f\n",
+  //        (float)partiton_reqs_in_parallel / gpu_sim_cycle);
+  // printf("partiton_level_parallism_total  = %12.4f\n",
+  //        (float)(partiton_reqs_in_parallel + partiton_reqs_in_parallel_total) /
+  //            (gpu_tot_sim_cycle + gpu_sim_cycle));
+  // // printf("partiton_reqs_in_parallel_util = %lld\n",
   // partiton_reqs_in_parallel_util);
   // printf("partiton_reqs_in_parallel_util_total    = %lld\n",
   // partiton_reqs_in_parallel_util_total ); printf("gpu_sim_cycle_parition_util
   // = %lld\n", gpu_sim_cycle_parition_util);
   // printf("gpu_tot_sim_cycle_parition_util    = %lld\n",
   // gpu_tot_sim_cycle_parition_util );
-  printf("partiton_level_parallism_util = %12.4f\n",
-         (float)partiton_reqs_in_parallel_util / gpu_sim_cycle_parition_util);
-  printf("partiton_level_parallism_util_total  = %12.4f\n",
-         (float)(partiton_reqs_in_parallel_util +
-                 partiton_reqs_in_parallel_util_total) /
-             (gpu_sim_cycle_parition_util + gpu_tot_sim_cycle_parition_util));
-  // printf("partiton_replys_in_parallel = %lld\n",
+  // printf("partiton_level_parallism_util = %12.4f\n",
+  //        (float)partiton_reqs_in_parallel_util / gpu_sim_cycle_parition_util);
+  // printf("partiton_level_parallism_util_total  = %12.4f\n",
+  //        (float)(partiton_reqs_in_parallel_util +
+  //                partiton_reqs_in_parallel_util_total) /
+  //            (gpu_sim_cycle_parition_util + gpu_tot_sim_cycle_parition_util));
+  // // printf("partiton_replys_in_parallel = %lld\n",
   // partiton_replys_in_parallel); printf("partiton_replys_in_parallel_total =
   // %lld\n", partiton_replys_in_parallel_total );
-  printf("L2_BW  = %12.4f GB/Sec\n",
-         ((float)(partiton_replys_in_parallel * 32) /
-          (gpu_sim_cycle * m_config.icnt_period)) /
-             1000000000);
-  printf("L2_BW_total  = %12.4f GB/Sec\n",
-         ((float)((partiton_replys_in_parallel +
-                   partiton_replys_in_parallel_total) *
-                  32) /
-          ((gpu_tot_sim_cycle + gpu_sim_cycle) * m_config.icnt_period)) /
-             1000000000);
+  // printf("L2_BW  = %12.4f GB/Sec\n",
+  //        ((float)(partiton_replys_in_parallel * 32) /
+  //         (gpu_sim_cycle * m_config.icnt_period)) /
+  //            1000000000);
+  // printf("L2_BW_total  = %12.4f GB/Sec\n",
+  //        ((float)((partiton_replys_in_parallel +
+  //                  partiton_replys_in_parallel_total) *
+  //                 32) /
+  //         ((gpu_tot_sim_cycle + gpu_sim_cycle) * m_config.icnt_period)) /
+  //            1000000000);
 
   time_t curr_time;
   time(&curr_time);
@@ -1300,21 +1300,21 @@ void gpgpu_sim::gpu_print_stat() {
          (unsigned)((gpu_tot_sim_insn + gpu_sim_insn) / elapsed_time));
 
   // shader_print_l1_miss_stat( stdout );
-  shader_print_cache_stats(stdout);
+  // shader_print_cache_stats(stdout);
 
   cache_stats core_cache_stats;
   core_cache_stats.clear();
   for (unsigned i = 0; i < m_config.num_cluster(); i++) {
     m_cluster[i]->get_cache_stats(core_cache_stats);
   }
-  printf("\nTotal_core_cache_stats:\n");
-  core_cache_stats.print_stats(stdout, "Total_core_cache_stats_breakdown");
-  printf("\nTotal_core_cache_fail_stats:\n");
-  core_cache_stats.print_fail_stats(stdout,
-                                    "Total_core_cache_fail_stats_breakdown");
-  shader_print_scheduler_stat(stdout, false);
+  // printf("\nTotal_core_cache_stats:\n");
+  // core_cache_stats.print_stats(stdout, "Total_core_cache_stats_breakdown");
+  // printf("\nTotal_core_cache_fail_stats:\n");
+  // core_cache_stats.print_fail_stats(stdout,
+  //                                   "Total_core_cache_fail_stats_breakdown");
+  // shader_print_scheduler_stat(stdout, false);
 
-  m_shader_stats->print(stdout);
+  // m_shader_stats->print(stdout);
 #ifdef GPGPUSIM_POWER_MODEL
   if (m_config.g_power_simulation_enabled) {
     m_gpgpusim_wrapper->print_power_kernel_stats(
@@ -1325,10 +1325,10 @@ void gpgpu_sim::gpu_print_stat() {
 #endif
 
   // performance counter that are not local to one shader
-  m_memory_stats->memlatstat_print(m_memory_config->m_n_mem,
-                                   m_memory_config->nbk);
-  for (unsigned i = 0; i < m_memory_config->m_n_mem; i++)
-    m_memory_partition_unit[i]->print(stdout);
+  // m_memory_stats->memlatstat_print(m_memory_config->m_n_mem,
+  //                                  m_memory_config->nbk);
+  // for (unsigned i = 0; i < m_memory_config->m_n_mem; i++)
+  //   m_memory_partition_unit[i]->print(stdout);
 
   // L2 cache stats
   if (!m_memory_config->m_L2_config.disabled()) {
