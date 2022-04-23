@@ -31,7 +31,13 @@
 #include "gpu-sim.h"
 #include "hashing.h"
 #include "stat-tool.h"
+#include "stdlib.h"
 
+#define EPSILON 0.99
+
+bool prob_true(){
+    return rand()/(RAND_MAX+1.0) < EPSILON;
+}
 // used to allocate memory that is large enough to adapt the changes in cache
 // size across kernels
 
@@ -502,6 +508,12 @@ tag_array_basic::tag_array_basic(cache_config &config, int core_id, int type_id)
 
 tag_array_basic::~tag_array_basic()
 {
+  if (m_config.m_replacement_policy == LFU)
+    printf("LFU deleted\n");
+  if (m_config.m_replacement_policy == MRU)
+    printf("MRU deleted\n");
+  if (m_config.m_replacement_policy == LRU)
+    printf("LRU deleted\n");
 }
 
 enum cache_request_status tag_array_basic::probe(new_addr_type addr, unsigned &idx,
@@ -683,28 +695,6 @@ enum cache_request_status tag_array_basic::access(new_addr_type addr, unsigned t
   return status;
 }
 
-// void tag_array::fill(new_addr_type addr, unsigned time, mem_fetch *mf) {
-//   fill(addr, time, mf->get_access_sector_mask());
-// }
-
-// void tag_array::fill(new_addr_type addr, unsigned time,
-//                      mem_access_sector_mask_t mask) {
-//   // assert( m_config.m_alloc_policy == ON_FILL );
-//   unsigned idx;
-//   enum cache_request_status status = probe(addr, idx, mask);
-//   // assert(status==MISS||status==SECTOR_MISS); // MSHR should have prevented
-//   // redundant memory request
-//   if (status == MISS)
-//     m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr), time,
-//                            mask);
-//   else if (status == SECTOR_MISS) {
-//     assert(m_config.m_cache_type == SECTOR);
-//     ((sector_cache_block *)m_lines[idx])->allocate_sector(time, mask);
-//   }
-
-//   m_lines[idx]->fill(time, mask);
-// }
-
 void tag_array_basic::fill(new_addr_type addr, unsigned time, mem_fetch *mf)
 {
     fill(addr, time, mf->get_access_sector_mask());
@@ -741,6 +731,271 @@ tag_array_basic::tag_array_basic(cache_config &config, int core_id, int type_id,
 {
 }
 
+tag_array_rrip::tag_array_rrip(cache_config &config, int core_id, int type_id) : tag_array(config, core_id, type_id)
+{
+  unsigned int n_set = m_config.get_nset();
+  unsigned int n_assoc = m_config.m_assoc;
+
+  rrvp = (unsigned **)calloc(n_set, sizeof(unsigned *));
+	for (unsigned i = 0; i < n_set; i++)
+    {
+        rrvp[i] = (unsigned *)calloc(n_assoc, sizeof(unsigned));
+    }
+	for(unsigned i = 0;i<n_set;i++) {
+		for (unsigned j = 0; j<n_assoc;j++) {
+			rrvp[i][j] = maxrrvp;
+		}
+	}
+}
+
+tag_array_rrip::~tag_array_rrip()
+{
+  //need to delete
+  unsigned int n_set = m_config.get_nset();
+  for (unsigned i = 0; i < n_set; i++)
+    {
+        delete rrvp[i];
+    }
+  delete rrvp;
+  
+  if (m_config.m_replacement_policy == SRRIP)
+    printf("SRRIP deleted\n");
+  else
+    printf("BRRIP deleted\n");
+}
+
+enum cache_request_status tag_array_rrip::probe(new_addr_type addr, unsigned &idx,
+                                               mem_fetch *mf,
+                                               bool probe_mode)
+{
+    mem_access_sector_mask_t mask = mf->get_access_sector_mask();
+    return probe(addr, idx, mask, probe_mode, mf);
+}
+
+enum cache_request_status tag_array_rrip::probe(new_addr_type addr, unsigned &idx,
+                                               mem_access_sector_mask_t mask,
+                                               bool probe_mode,
+                                               mem_fetch *mf)
+{
+  unsigned set_index = m_config.set_index(addr);
+  new_addr_type tag = m_config.tag(addr);
+
+  unsigned invalid_line = (unsigned)-1;
+  unsigned valid_line = (unsigned)-1;
+
+  bool all_reserved = true;
+
+  // check for hit or pending hit
+  for (unsigned way = 0; way < m_config.m_assoc; way++) {
+    unsigned index = set_index * m_config.m_assoc + way;
+    cache_block_t *line = m_lines[index];
+    if (line->m_tag == tag) {
+      if (line->get_status(mask) == RESERVED) {
+        idx = index;
+        return HIT_RESERVED;
+      } else if (line->get_status(mask) == VALID) {
+        idx = index;
+        return HIT;
+      } else if (line->get_status(mask) == MODIFIED) {
+        if (line->is_readable(mask)) {
+          idx = index;
+          return HIT;
+        } else {
+          idx = index;
+          return SECTOR_MISS;
+        }
+
+      } else if (line->is_valid_line() && line->get_status(mask) == INVALID) {
+        idx = index;
+        return SECTOR_MISS;
+      } else {
+        assert(line->get_status(mask) == INVALID);
+      }
+    }
+    if (!line->is_reserved_line()) {
+      all_reserved = false;
+      if (line->is_invalid_line()) {
+        invalid_line = index;
+      } 
+      }
+  }
+  if (all_reserved) {
+    assert(m_config.m_alloc_policy == ON_MISS);
+    return RESERVATION_FAIL;  // miss and not enough space in cache to allocate
+                              // on miss
+  }
+
+  if (invalid_line != (unsigned)-1) {
+    idx = invalid_line;
+  } else {
+    valid_line = select_eviction(set_index);
+    if (valid_line != (unsigned) - 1)
+      idx = valid_line;
+    else
+      abort();
+  }
+  if (probe_mode && m_config.is_streaming()) {
+    line_table::const_iterator i =
+        pending_lines.find(m_config.block_addr(addr));
+    assert(mf);
+    if (!mf->is_write() && i != pending_lines.end()) {
+      if (i->second != mf->get_inst().get_uid()) return SECTOR_MISS;
+    }
+  }
+  return MISS;
+}
+
+enum cache_request_status tag_array_rrip::access(new_addr_type addr, unsigned time,
+                                                unsigned &idx, mem_fetch *mf)
+{
+    bool wb = false;
+    evicted_block_info evicted;
+    enum cache_request_status result = access(addr, time, idx, wb, evicted, mf);
+    assert(!wb);
+    return result;
+}
+
+enum cache_request_status tag_array_rrip::access(new_addr_type addr, unsigned time,
+                                                unsigned &idx, bool &wb,
+                                                evicted_block_info &evicted,
+                                                mem_fetch *mf)
+{
+  m_access++;
+  is_used = true;
+  
+  unsigned set_index = idx / m_config.m_assoc;
+  unsigned blockno = idx % m_config.m_assoc;
+
+  shader_cache_access_log(m_core_id, m_type_id, 0);  // log accesses to cache
+  enum cache_request_status status = probe(addr, idx, mf);
+  switch (status) {
+    case HIT_RESERVED:
+      m_pending_hit++;
+    case HIT:
+      m_lines[idx]->set_last_access_time(time, mf->get_access_sector_mask());
+      //increase access frequency
+      m_lines[idx]->incr_access_frequency();
+      //set rrvp of hits to 0
+      rrvp[set_index][blockno] = 0; 
+      break;
+    case MISS:
+      m_miss++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      if (m_config.m_alloc_policy == ON_MISS) {
+        if (m_lines[idx]->is_modified_line()) {
+          wb = true;
+          evicted.set_info(m_lines[idx]->m_block_addr,
+                           m_lines[idx]->get_modified_size());
+        }
+        m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr),
+                               time, mf->get_access_sector_mask());
+      }
+      break;
+    case SECTOR_MISS:
+      assert(m_config.m_cache_type == SECTOR);
+      m_sector_miss++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      if (m_config.m_alloc_policy == ON_MISS) {
+        ((sector_cache_block *)m_lines[idx])
+            ->allocate_sector(time, mf->get_access_sector_mask());
+      }
+      break;
+    case RESERVATION_FAIL:
+      m_res_fail++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      break;
+    default:
+      fprintf(stderr,
+              "tag_array::access - Error: Unknown"
+              "cache_request_status %d\n",
+              status);
+      abort();
+  }
+  return status;
+}
+
+void tag_array_rrip::fill(new_addr_type addr, unsigned time, mem_fetch *mf)
+{
+    fill(addr, time, mf->get_access_sector_mask());
+}
+
+void tag_array_rrip::fill(new_addr_type addr, unsigned time,
+                         mem_access_sector_mask_t mask)
+{
+    // assert( m_config.m_alloc_policy == ON_FILL );
+    unsigned idx;
+    enum cache_request_status status = probe(addr, idx, mask);
+    // assert(status==MISS||status==SECTOR_MISS); // MSHR should have prevented
+    // redundant memory request
+    if (status == MISS)
+        m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr), time,
+                               mask);
+    else if (status == SECTOR_MISS)
+    {
+        assert(m_config.m_cache_type == SECTOR);
+        ((sector_cache_block *)m_lines[idx])->allocate_sector(time, mask);
+    }
+
+    m_lines[idx]->fill(time, mask);
+}
+
+void tag_array_rrip::fill(unsigned index, unsigned time, mem_fetch *mf)
+{
+    assert(m_config.m_alloc_policy == ON_MISS);
+    m_lines[index]->fill(time, mf->get_access_sector_mask());
+}
+
+unsigned tag_array_rrip::find_distant(unsigned set_index, unsigned dist){
+ unsigned loop_count=0;
+ while(true){
+  loop_count++;
+  for (int i = 0; i < m_config.m_assoc; i++){
+    unsigned index = set_index*m_config.m_assoc + i;
+    if (!m_lines[index]->is_reserved_line()){
+      assert(!m_lines[index]->is_invalid_line());
+      if (rrvp[set_index][i] == dist)
+          return index; 
+      }
+  }
+  for (int i = 0; i < m_config.m_assoc;i++){
+      rrvp[set_index][i]++;
+  }
+  if (loop_count == 2*dist)
+    break;
+  }
+  return 0;
+}
+
+unsigned tag_array_rrip:: select_eviction(unsigned set_index){
+  if (m_config.m_replacement_policy == SRRIP)
+    return find_distant(set_index, maxrrvp);
+  else if (m_config.m_replacement_policy == BRRIP) 
+  {
+    if (prob_true()){
+      return find_distant(set_index, maxrrvp);
+    }
+    return find_distant(set_index, maxrrvp-1);
+ }
+}
+
+tag_array_rrip::tag_array_rrip(cache_config &config, int core_id, int type_id,
+                             cache_block_t **new_lines) : tag_array(config, core_id, type_id, new_lines)
+{
+  unsigned n_set = m_config.get_nset();
+  unsigned n_assoc = m_config.m_assoc;
+
+  rrvp = (unsigned **)calloc(n_set, sizeof(unsigned *));
+	for (unsigned i = 0; i < n_set; i++)
+    {
+        rrvp[i] = (unsigned *)calloc(n_assoc, sizeof(unsigned));
+    }
+	for(unsigned i = 0;i<n_set;i++) {
+		for (unsigned j = 0; j<n_assoc;j++) {
+			rrvp[i][j] = maxrrvp;
+		}
+	}
+}
+
 baseline_cache::baseline_cache(const char *name, cache_config &config, int core_id,
                                int type_id, mem_fetch_interface *memport,
                                enum mem_fetch_status status)
@@ -756,10 +1011,16 @@ baseline_cache::baseline_cache(const char *name, cache_config &config, int core_
         case LFU:
             m_tag_array = new tag_array_basic(config, core_id, type_id);
             break;
+        case SRRIP:
+        case BRRIP:
+            printf("RRIP Created\n");
+            m_tag_array = new tag_array_rrip(config, core_id, type_id);
+            break;
+        default:
+            printf("Bad argument\n");
     }
     init(name, config, memport, status);
 }
-
 
 bool was_write_sent(const std::list<cache_event> &events) {
   for (std::list<cache_event>::const_iterator e = events.begin();
@@ -1975,6 +2236,7 @@ enum cache_request_status l2_cache::access(new_addr_type addr, mem_fetch *mf,
                                            std::list<cache_event> &events) {
   unsigned set_index = m_config.set_index(addr);
   new_addr_type tag = m_config.tag(addr);
+
   printf("%d %lld\n", set_index, tag);
   return data_cache::access(addr, mf, time, events);
 }

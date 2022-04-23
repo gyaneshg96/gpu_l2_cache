@@ -40,7 +40,10 @@
 #include <iostream>
 #include "addrdec.h"
 
+#define MAX_RRVP 7 //2^M - 1
 #define MAX_DEFAULT_CACHE_SIZE_MULTIBLIER 4
+
+#define printEnum(data) printf("Policy: %s\n",#data);
 
 enum cache_block_state { INVALID = 0, RESERVED, VALID, MODIFIED };
 
@@ -430,7 +433,7 @@ struct sector_cache_block : public cache_block_t {
   }
 };
 
-enum replacement_policy_t { LRU, FIFO, MRU, LFU, SRRIP, HAWKEYE };
+enum replacement_policy_t { LRU, FIFO, MRU, LFU, SRRIP, BRRIP, HAWKEYE };
 
 enum write_policy_t {
   READ_ONLY,
@@ -529,8 +532,11 @@ class cache_config {
       case 'H':
         m_replacement_policy = HAWKEYE;
         break;
-      case 'R':
+      case 'S':
         m_replacement_policy = SRRIP;
+        break;
+      case 'B':
+        m_replacement_policy = BRRIP;
         break;
       default:
         exit_parse_error();
@@ -681,7 +687,11 @@ class cache_config {
       default:
         exit_parse_error();
     }
+
+    // printEnum(m_replacement_policy);
+    printf("Policy: %d\n", m_replacement_policy);
   }
+
   bool disabled() const { return m_disabled; }
   unsigned get_line_sz() const {
     assert(m_valid);
@@ -798,6 +808,7 @@ class cache_config {
 
   friend class tag_array;
   friend class tag_array_basic;
+  friend class tag_array_rrip;
   friend class baseline_cache;
   friend class read_only_cache;
   friend class tex_cache;
@@ -935,6 +946,38 @@ protected:
             cache_block_t **new_lines);
 };
 
+class tag_array_rrip: public tag_array {
+ public:
+  tag_array_rrip(cache_config &config, int core_id, int type_id);
+  ~tag_array_rrip();
+
+  enum cache_request_status probe(new_addr_type addr, unsigned &idx,
+                                  mem_fetch *mf, bool probe_mode = false);
+  enum cache_request_status probe(new_addr_type addr, unsigned &idx,
+                                  mem_access_sector_mask_t mask,
+                                  bool probe_mode = false,
+                                  mem_fetch *mf = NULL);
+  enum cache_request_status access(new_addr_type addr, unsigned time,
+                                   unsigned &idx, mem_fetch *mf);
+  enum cache_request_status access(new_addr_type addr, unsigned time,
+                                   unsigned &idx, bool &wb,
+                                   evicted_block_info &evicted, mem_fetch *mf);
+
+  void fill(new_addr_type addr, unsigned time, mem_fetch *mf);
+  void fill(unsigned idx, unsigned time, mem_fetch *mf);
+  void fill(new_addr_type addr, unsigned time, mem_access_sector_mask_t mask);
+
+  unsigned select_eviction(unsigned set_index); 
+  unsigned find_distant(unsigned set_index, unsigned dist);
+  
+  protected:
+    tag_array_rrip(cache_config &config, int core_id, int type_id,
+            cache_block_t **new_lines);
+
+  private:
+    unsigned maxrrvp = MAX_RRVP;
+    unsigned **rrvp;
+};
 
 class mshr_table {
  public:

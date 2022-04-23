@@ -1370,6 +1370,8 @@ void gpgpu_sim::gpu_print_stat() {
       l2_stats.print_fail_stats(stdout, "L2_cache_stats_fail_breakdown");
       total_l2_css.print_port_stats(stdout, "L2_cache");
     }
+    //TODO
+    // evaluate_belady();
   }
 
   if (m_config.gpgpu_cflog_interval != 0) {
