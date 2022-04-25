@@ -890,6 +890,7 @@ enum cache_request_status tag_array_rrip::access(new_addr_type addr, unsigned ti
         m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr),
                                time, mf->get_access_sector_mask());
       }
+      rrvp[set_index][blockno] = maxrrvp - 1;
       break;
     case SECTOR_MISS:
       assert(m_config.m_cache_type == SECTOR);
@@ -899,6 +900,7 @@ enum cache_request_status tag_array_rrip::access(new_addr_type addr, unsigned ti
         ((sector_cache_block *)m_lines[idx])
             ->allocate_sector(time, mf->get_access_sector_mask());
       }
+      rrvp[set_index][blockno] = maxrrvp - 1;
       break;
     case RESERVATION_FAIL:
       m_res_fail++;
@@ -996,6 +998,144 @@ tag_array_rrip::tag_array_rrip(cache_config &config, int core_id, int type_id,
 	}
 }
 
+tag_array_drrip::tag_array_drrip(cache_config &config, int core_id, int type_id) : tag_array_rrip(config, core_id, type_id)
+{
+  unsigned n_set = m_config.get_nset();
+  s_types = (set_type *)calloc(n_set, sizeof(set_type));
+
+  for (unsigned i = 0; i < n_set;i++){
+    if (i % 4 == 1)
+      s_types[i] = SRRIP_MONITOR;
+    else if (i % 4 == 2)
+      s_types[i] = BRRIP_MONITOR;
+    else
+      s_types[i] = FOLLOWER;
+  }
+
+  psel = 0;
+}
+
+enum cache_request_status tag_array_drrip::access(new_addr_type addr, unsigned time,
+                                                unsigned &idx, mem_fetch *mf)
+{
+    bool wb = false;
+    evicted_block_info evicted;
+    enum cache_request_status result = access(addr, time, idx, wb, evicted, mf);
+    assert(!wb);
+    return result;
+}
+
+enum cache_request_status tag_array_drrip::access(new_addr_type addr, unsigned time,
+                                                unsigned &idx, bool &wb,
+                                                evicted_block_info &evicted,
+                                                mem_fetch *mf)
+{
+  m_access++;
+  is_used = true;
+  
+  unsigned set_index = idx / m_config.m_assoc;
+  unsigned blockno = idx % m_config.m_assoc;
+
+  shader_cache_access_log(m_core_id, m_type_id, 0);  // log accesses to cache
+  enum cache_request_status status = probe(addr, idx, mf);
+  switch (status) {
+    case HIT_RESERVED:
+      m_pending_hit++;
+    case HIT:
+      m_lines[idx]->set_last_access_time(time, mf->get_access_sector_mask());
+      //increase access frequency
+      m_lines[idx]->incr_access_frequency();
+      //set rrvp of hits to 0
+      rrvp[set_index][blockno] = 0;
+      if (s_types[set_index] == SRRIP_MONITOR)
+        psel++;
+      else if (s_types[set_index] == BRRIP_MONITOR)
+        psel--; 
+      break;
+    case MISS:
+      m_miss++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      if (m_config.m_alloc_policy == ON_MISS) {
+        if (m_lines[idx]->is_modified_line()) {
+          wb = true;
+          evicted.set_info(m_lines[idx]->m_block_addr,
+                           m_lines[idx]->get_modified_size());
+        }
+        m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr),
+                               time, mf->get_access_sector_mask());
+      }
+      rrvp[set_index][blockno] = maxrrvp - 1;
+      break;
+    case SECTOR_MISS:
+      assert(m_config.m_cache_type == SECTOR);
+      m_sector_miss++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      if (m_config.m_alloc_policy == ON_MISS) {
+        ((sector_cache_block *)m_lines[idx])
+            ->allocate_sector(time, mf->get_access_sector_mask());
+      }
+      rrvp[set_index][blockno] = maxrrvp - 1;
+      break;
+    case RESERVATION_FAIL:
+      m_res_fail++;
+      shader_cache_access_log(m_core_id, m_type_id, 1);  // log cache misses
+      break;
+    default:
+      fprintf(stderr,
+              "tag_array::access - Error: Unknown"
+              "cache_request_status %d\n",
+              status);
+      abort();
+  }
+  return status;
+}
+
+
+tag_array_drrip::~tag_array_drrip(){
+  delete s_types;
+}
+
+unsigned tag_array_drrip::select_eviction(unsigned set_index){
+  if (s_types[set_index] == SRRIP_MONITOR){
+    return find_distant(set_index, maxrrvp);
+  }
+  else if (s_types[set_index] == BRRIP_MONITOR){
+    if (prob_true()){
+      return find_distant(set_index, maxrrvp);
+    }
+    return find_distant(set_index, maxrrvp-1);
+  }
+  else {
+    if (psel > 0){
+      return find_distant(set_index, maxrrvp);
+    }
+    else {
+      if (prob_true()){
+      return find_distant(set_index, maxrrvp);
+      }
+      return find_distant(set_index, maxrrvp-1);
+      }
+    }
+}
+
+tag_array_drrip::tag_array_drrip(cache_config &config, int core_id, int type_id, 
+  cache_block_t **new_lines) : tag_array_rrip(config, core_id, type_id, new_lines)
+{
+  unsigned n_set = m_config.get_nset();
+  s_types = (set_type *)calloc(n_set, sizeof(set_type));
+
+  for (unsigned i = 0; i < n_set;i++){
+    if (i % 4 == 1)
+      s_types[i] = SRRIP_MONITOR;
+    else if (i % 4 == 2)
+      s_types[i] = BRRIP_MONITOR;
+    else
+      s_types[i] = FOLLOWER;
+  }
+
+  psel = 0;
+}
+
 baseline_cache::baseline_cache(const char *name, cache_config &config, int core_id,
                                int type_id, mem_fetch_interface *memport,
                                enum mem_fetch_status status)
@@ -1015,6 +1155,10 @@ baseline_cache::baseline_cache(const char *name, cache_config &config, int core_
         case BRRIP:
             printf("RRIP Created\n");
             m_tag_array = new tag_array_rrip(config, core_id, type_id);
+            break;
+        case DRRIP:
+            printf("DRRIP Created\n");
+            m_tag_array = new tag_array_drrip(config, core_id, type_id);
             break;
         default:
             printf("Bad argument\n");
